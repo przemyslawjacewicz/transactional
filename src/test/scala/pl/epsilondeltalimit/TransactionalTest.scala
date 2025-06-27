@@ -1,7 +1,7 @@
 package pl.epsilondeltalimit
 
 import io.delta.tables.DeltaTable
-import org.apache.hadoop.fs.{FileUtil, Path}
+import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 import pl.epsilondeltalimit.ThrowWhenNot.throwWhenNotTrue
 import pl.epsilondeltalimit.Transactional._

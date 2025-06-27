@@ -13,7 +13,59 @@ import scala.util.{Failure, Success, Try}
 
 object Transactional extends LazyLogging {
 
-  case class Single[S, O, B](source: S, output: S => O, backup: S => B, restore: B => S => Unit, cleanup: B => Unit)
+  def delta[O](p: (String, SparkSession => String => O), ps: (String, SparkSession => String => O)*)(
+      implicit spark: SparkSession): Try[Seq[O]] = {
+    import spark.implicits._
+
+    def getVersion(path: String): Option[Long] =
+      if (DeltaTable.isDeltaTable(path)) {
+        Some(DeltaTable.forPath(path).history().select(max("version")).as[Long].first())
+      } else {
+        None
+      }
+
+    def restoreToVersion(path: String, version: Option[Long]): Unit =
+      version match {
+        case Some(v) =>
+          DeltaTable.forPath(path).restoreToVersion(v)
+        case None =>
+          usingFileSystem(_.delete(new Path(path), true))
+      }
+
+    def single(in: (String, SparkSession => String => O)): Single[String, O, Option[Long]] =
+      Single(
+        source = in._1,
+        output = s => in._2(spark)(s),
+        backup = s => getVersion(s),
+        restore = b => s => restoreToVersion(s, b),
+        cleanup = _ => ()
+      )
+
+    transactional(s = single(p), ss = ps.map(single): _*)
+  }
+
+  def parquet[O](p: (String, SparkSession => String => O), ps: (String, SparkSession => String => O)*)(
+      implicit spark: SparkSession): Try[Seq[O]] = {
+
+    def rw(from: String, to: String): String = {
+      spark.read.format("parquet").load(from).write.format("parquet").mode("overwrite").save(to)
+      to
+    }
+
+    def delete(p: String): Unit =
+      usingFileSystem(_.delete(new Path(p), true))
+
+    def single(in: (String, SparkSession => String => O)): Single[String, O, String] =
+      Single(
+        source = in._1,
+        output = s => in._2(spark)(s),
+        backup = s => rw(s, s + ".bak"),
+        restore = b => s => rw(b, s),
+        cleanup = delete
+      )
+
+    transactional(s = single(p), ss = ps.map(single): _*)
+  }
 
   def transactional[S, O, B](s: Single[S, O, B], ss: Single[S, O, B]*): Try[Seq[O]] = {
     val sss = s +: ss
@@ -71,62 +123,8 @@ object Transactional extends LazyLogging {
     result
   }
 
-  def delta[O](p: (String, SparkSession => String => O), ps: (String, SparkSession => String => O)*)(
-      implicit spark: SparkSession): Try[Seq[O]] = {
-    import spark.implicits._
-
-    def getVersion(path: String): Option[Long] =
-      if (DeltaTable.isDeltaTable(path)) {
-        Some(DeltaTable.forPath(path).history().select(max("version")).as[Long].first())
-      } else {
-        None
-      }
-
-    def restoreToVersion(path: String, version: Option[Long]): Unit =
-      version match {
-        case Some(v) =>
-          DeltaTable.forPath(path).restoreToVersion(v)
-        case None =>
-          usingFileSystem(_.delete(new Path(path), true))
-      }
-
-    def single(in: (String, SparkSession => String => O)): Single[String, O, Option[Long]] =
-      Single(
-        source = in._1,
-        output = s => in._2(spark)(s),
-        backup = s => getVersion(s),
-        restore = b => s => restoreToVersion(s, b),
-        cleanup = _ => ()
-      )
-
-    transactional(s = single(p), ss = ps.map(single): _*)
-  }
-
-  def parquet[O](p: (String, SparkSession => String => O), ps: (String, SparkSession => String => O)*)(
-      implicit spark: SparkSession): Try[Seq[O]] = {
-
-    def rw(from: String, to: String): String = {
-      spark.read.format("parquet").load(from).write.format("parquet").mode("overwrite").save(to)
-      to
-    }
-
-    def delete(p: String): Unit =
-      usingFileSystem(_.delete(new Path(p), true))
-
-    def single(in: (String, SparkSession => String => O)): Single[String, O, String] =
-      Single(
-        source = in._1,
-        output = s => in._2(spark)(s),
-        backup = s => rw(s, s + ".bak"),
-        restore = b => s => rw(b, s),
-        cleanup = delete
-      )
-
-    transactional(s = single(p), ss = ps.map(single): _*)
-  }
-
   def backup[O](p: (String, SparkSession => String => O), ps: (String, SparkSession => String => O)*)(
-    implicit spark: SparkSession): Try[Seq[O]] = {
+      implicit spark: SparkSession): Try[Seq[O]] = {
 
     def copy(from: String, to: String): String = {
       usingFileSystem { fs =>
@@ -151,5 +149,7 @@ object Transactional extends LazyLogging {
 
     transactional(s = single(p), ss = ps.map(single): _*)
   }
+
+  case class Single[S, O, B](source: S, output: S => O, backup: S => B, restore: B => S => Unit, cleanup: B => Unit)
 
 }

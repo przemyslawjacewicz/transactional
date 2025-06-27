@@ -1,6 +1,9 @@
 package pl.epsilondeltalimit
 
 object ThrowWhenNot {
+  def throwWhenNotTrue(o: => Boolean): Unit =
+    throwWhenNot(true)(o)
+
   def throwWhenNot[T](success: T)(o: => T): Unit = {
     val isSuccess = o
 
@@ -8,7 +11,4 @@ object ThrowWhenNot {
       throw new RuntimeException("Operation finished with non-success value!")
     }
   }
-
-  def throwWhenNotTrue(o: => Boolean): Unit =
-    throwWhenNot(true)(o)
 }
