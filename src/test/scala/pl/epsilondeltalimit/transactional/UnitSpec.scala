@@ -1,4 +1,4 @@
-package pl.epsilondeltalimit
+package pl.epsilondeltalimit.transactional
 
 import com.github.mrpowers.spark.fast.tests.DatasetComparer
 import org.apache.hadoop.fs.Path

@@ -1,4 +1,4 @@
-package pl.epsilondeltalimit
+package pl.epsilondeltalimit.transactional
 
 import org.apache.spark.sql.SparkSession
 

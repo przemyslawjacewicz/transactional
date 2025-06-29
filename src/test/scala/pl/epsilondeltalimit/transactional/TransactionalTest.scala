@@ -1,21 +1,24 @@
-package pl.epsilondeltalimit
+package pl.epsilondeltalimit.transactional
 
 import io.delta.tables.DeltaTable
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
-import pl.epsilondeltalimit.ThrowWhenNot.throwWhenNotTrue
-import pl.epsilondeltalimit.Transactional._
-import pl.epsilondeltalimit.Using.{using, usingFileSystem}
+import pl.epsilondeltalimit.transactional.ThrowWhenNot.throwWhenNotTrue
+import pl.epsilondeltalimit.transactional.Transactional._
+import pl.epsilondeltalimit.transactional.Using.implicits.javaIoClosable
+import pl.epsilondeltalimit.transactional.Using.{using, usingFileSystem}
 
 import java.io.IOException
 import scala.io.Source
 import scala.util.{Failure, Success, Try}
 
 class TransactionalTest extends UnitFunSpec {
-  import Using.implicits._
   import spark.implicits._
 
-  describe("delta") {
+  describe("transactional with delta table backup") {
+    val single: (String, String => Unit) => SingleWithDeltaVersionBackup[Unit] =
+      (source, output) => SingleWithDeltaVersionBackup(source, output)
+
     describe("when executed for the same table") {
       describe("when executed with operations that are successful") {
         it("should update table") {
@@ -24,9 +27,9 @@ class TransactionalTest extends UnitFunSpec {
 
             Seq(0).toDF().write.format("delta").save(path)
 
-            val result: Try[Seq[Unit]] = delta(
-              (path, _ => path => Seq(1).toDF().write.format("delta").mode("append").save(path)),
-              (path, _ => path => Seq(2).toDF().write.format("delta").mode("append").save(path))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, Seq(1).toDF().write.format("delta").mode("append").save),
+              single(path, Seq(2).toDF().write.format("delta").mode("append").save)
             )
 
             result should ===(Success(Seq((), ())))
@@ -43,9 +46,9 @@ class TransactionalTest extends UnitFunSpec {
 
             Seq(0).toDF().write.format("delta").save(path)
 
-            val result: Try[Seq[Unit]] = delta(
-              (path, _ => (_: String) => throw new RuntimeException("I fail!")),
-              (path, _ => path => Seq(2).toDF().write.format("delta").mode("append").save(path))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, _ => throw new RuntimeException("I fail!")),
+              single(path, Seq(2).toDF().write.format("delta").mode("append").save)
             )
 
             result shouldBe a[Failure[_]]
@@ -60,9 +63,9 @@ class TransactionalTest extends UnitFunSpec {
 
             Seq(0).toDF().write.format("delta").save(path)
 
-            val result: Try[Seq[Unit]] = delta(
-              (path, _ => _ => Seq(1).toDF().write.format("delta").mode("append").save(path)),
-              (path, _ => _ => throw new RuntimeException("I fail!"))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, Seq(1).toDF().write.format("delta").mode("append").save),
+              single(path, _ => throw new RuntimeException("I fail!"))
             )
 
             result shouldBe a[Failure[_]]
@@ -83,9 +86,9 @@ class TransactionalTest extends UnitFunSpec {
             Seq(0).toDF().write.format("delta").save(path1)
             Seq(0).toDF().write.format("delta").save(path2)
 
-            val result: Try[Seq[Unit]] = delta(
-              (path1, _ => path => Seq(1).toDF().write.format("delta").mode("append").save(path)),
-              (path2, _ => path => Seq(1).toDF().write.format("delta").mode("append").save(path))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, Seq(1).toDF().write.format("delta").mode("append").save),
+              single(path2, Seq(1).toDF().write.format("delta").mode("append").save)
             )
 
             result should ===(Success(Seq((), ())))
@@ -106,9 +109,9 @@ class TransactionalTest extends UnitFunSpec {
             Seq(0).toDF().write.format("delta").save(path1)
             Seq(0).toDF().write.format("delta").save(path2)
 
-            val result: Try[Seq[Unit]] = delta(
-              (path1, _ => _ => throw new RuntimeException("I fail!")),
-              (path2, _ => path => Seq(1).toDF().write.format("delta").mode("append").save(path))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, _ => throw new RuntimeException("I fail!")),
+              single(path2, Seq(1).toDF().write.format("delta").mode("append").save)
             )
 
             result shouldBe a[Failure[_]]
@@ -127,9 +130,9 @@ class TransactionalTest extends UnitFunSpec {
             Seq(0).toDF().write.format("delta").save(path1)
             Seq(0).toDF().write.format("delta").save(path2)
 
-            val result: Try[Seq[Unit]] = delta(
-              (path1, _ => path => Seq(1).toDF().write.format("delta").mode("append").save(path)),
-              (path2, _ => _ => throw new RuntimeException("I fail!"))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, Seq(1).toDF().write.format("delta").mode("append").save),
+              single(path2, _ => throw new RuntimeException("I fail!"))
             )
 
             result shouldBe a[Failure[_]]
@@ -143,7 +146,10 @@ class TransactionalTest extends UnitFunSpec {
     }
   }
 
-  describe("parquet") {
+  describe("transactional with parquet copy backup") {
+    val single: (String, String => Unit) => SingleWithCopyBackup[Unit] =
+      (source, output) => SingleWithCopyBackup.SparkCopy(source, output, "parquet")
+
     describe("when executed for the same table") {
       describe("when executed with operations that are successful") {
         it("should update table") {
@@ -152,9 +158,9 @@ class TransactionalTest extends UnitFunSpec {
 
             Seq(0).toDF().write.format("parquet").save(path)
 
-            val result: Try[Seq[Unit]] = parquet(
-              (path, _ => path => Seq(1).toDF().write.format("parquet").mode("append").save(path)),
-              (path, _ => path => Seq(2).toDF().write.format("parquet").mode("append").save(path))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, Seq(1).toDF().write.format("parquet").mode("append").save),
+              single(path, Seq(2).toDF().write.format("parquet").mode("append").save)
             )
 
             result should ===(Success(Seq((), ())))
@@ -171,9 +177,9 @@ class TransactionalTest extends UnitFunSpec {
 
             Seq(0).toDF().write.format("parquet").save(path)
 
-            val result: Try[Seq[Unit]] = parquet(
-              (path, _ => (_: String) => throw new RuntimeException("I fail!")),
-              (path, _ => path => Seq(2).toDF().write.format("parquet").mode("append").save(path))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, _ => throw new RuntimeException("I fail!")),
+              single(path, Seq(2).toDF().write.format("parquet").mode("append").save)
             )
 
             result shouldBe a[Failure[_]]
@@ -188,9 +194,9 @@ class TransactionalTest extends UnitFunSpec {
 
             Seq(0).toDF().write.format("parquet").save(path)
 
-            val result: Try[Seq[Unit]] = parquet(
-              (path, _ => _ => Seq(1).toDF().write.format("parquet").mode("append").save(path)),
-              (path, _ => _ => throw new RuntimeException("I fail!"))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, Seq(1).toDF().write.format("parquet").mode("append").save),
+              single(path, _ => throw new RuntimeException("I fail!"))
             )
 
             result shouldBe a[Failure[_]]
@@ -211,9 +217,9 @@ class TransactionalTest extends UnitFunSpec {
             Seq(0).toDF().write.format("parquet").save(path1)
             Seq(0).toDF().write.format("parquet").save(path2)
 
-            val result: Try[Seq[Unit]] = parquet(
-              (path1, _ => path => Seq(1).toDF().write.format("parquet").mode("append").save(path)),
-              (path2, _ => path => Seq(1).toDF().write.format("parquet").mode("append").save(path))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, Seq(1).toDF().write.format("parquet").mode("append").save),
+              single(path2, Seq(1).toDF().write.format("parquet").mode("append").save)
             )
 
             result should ===(Success(Seq((), ())))
@@ -234,9 +240,9 @@ class TransactionalTest extends UnitFunSpec {
             Seq(0).toDF().write.format("parquet").save(path1)
             Seq(0).toDF().write.format("parquet").save(path2)
 
-            val result: Try[Seq[Unit]] = parquet(
-              (path1, _ => _ => throw new RuntimeException("I fail!")),
-              (path2, _ => path => Seq(1).toDF().write.format("parquet").mode("append").save(path))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, _ => throw new RuntimeException("I fail!")),
+              single(path2, Seq(1).toDF().write.format("parquet").mode("append").save)
             )
 
             result shouldBe a[Failure[_]]
@@ -255,9 +261,9 @@ class TransactionalTest extends UnitFunSpec {
             Seq(0).toDF().write.format("parquet").save(path1)
             Seq(0).toDF().write.format("parquet").save(path2)
 
-            val result: Try[Seq[Unit]] = parquet(
-              (path1, _ => path => Seq(1).toDF().write.format("parquet").mode("append").save(path)),
-              (path2, _ => _ => throw new RuntimeException("I fail!"))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, Seq(1).toDF().write.format("parquet").mode("append").save),
+              single(path2, _ => throw new RuntimeException("I fail!"))
             )
 
             result shouldBe a[Failure[_]]
@@ -271,7 +277,10 @@ class TransactionalTest extends UnitFunSpec {
     }
   }
 
-  describe("backup") {
+  describe("transactional with copy backup") {
+    val single: (String, String => Unit) => SingleWithCopyBackup[Unit] =
+      (source, output) => SingleWithCopyBackup.FileSystemCopy(source, output)
+
     def createFile(path: String, content: String)(implicit spark: SparkSession): Boolean =
       usingFileSystem { fs =>
         try using(fs.create(new Path(path))) { o =>
@@ -316,9 +325,9 @@ class TransactionalTest extends UnitFunSpec {
 
             throwWhenNotTrue(createFile(path, "0"))
 
-            val result: Try[Seq[Unit]] = backup(
-              (path, _ => path => throwWhenNotTrue(appendToFile(path, "1"))),
-              (path, _ => path => throwWhenNotTrue(appendToFile(path, "2")))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, path => throwWhenNotTrue(appendToFile(path, "1"))),
+              single(path, path => throwWhenNotTrue(appendToFile(path, "2")))
             )
 
             result should ===(Success(Seq((), ())))
@@ -335,9 +344,9 @@ class TransactionalTest extends UnitFunSpec {
 
             throwWhenNotTrue(createFile(path, "0"))
 
-            val result: Try[Seq[Unit]] = backup(
-              (path, _ => (_: String) => throw new RuntimeException("I fail!")),
-              (path, _ => path => throwWhenNotTrue(appendToFile(path, "2")))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, _ => throw new RuntimeException("I fail!")),
+              single(path, path => throwWhenNotTrue(appendToFile(path, "2")))
             )
 
             result shouldBe a[Failure[_]]
@@ -352,9 +361,9 @@ class TransactionalTest extends UnitFunSpec {
 
             throwWhenNotTrue(createFile(path, "0"))
 
-            val result: Try[Seq[Unit]] = backup(
-              (path, _ => _ => throwWhenNotTrue(appendToFile(path, "1"))),
-              (path, _ => _ => throw new RuntimeException("I fail!"))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path, path => throwWhenNotTrue(appendToFile(path, "1"))),
+              single(path, _ => throw new RuntimeException("I fail!"))
             )
 
             result shouldBe a[Failure[_]]
@@ -375,9 +384,9 @@ class TransactionalTest extends UnitFunSpec {
             throwWhenNotTrue(createFile(path1, "0"))
             throwWhenNotTrue(createFile(path2, "0"))
 
-            val result: Try[Seq[Unit]] = backup(
-              (path1, _ => path => throwWhenNotTrue(appendToFile(path, "1"))),
-              (path2, _ => path => throwWhenNotTrue(appendToFile(path, "1")))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, path => throwWhenNotTrue(appendToFile(path, "1"))),
+              single(path2, path => throwWhenNotTrue(appendToFile(path, "1")))
             )
 
             result should ===(Success(Seq((), ())))
@@ -398,9 +407,9 @@ class TransactionalTest extends UnitFunSpec {
             throwWhenNotTrue(createFile(path1, "0"))
             throwWhenNotTrue(createFile(path2, "0"))
 
-            val result: Try[Seq[Unit]] = backup(
-              (path1, _ => _ => throw new RuntimeException("I fail!")),
-              (path2, _ => path => throwWhenNotTrue(appendToFile(path, "1")))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, _ => throw new RuntimeException("I fail!")),
+              single(path2, path => throwWhenNotTrue(appendToFile(path, "1")))
             )
 
             result shouldBe a[Failure[_]]
@@ -419,9 +428,9 @@ class TransactionalTest extends UnitFunSpec {
             throwWhenNotTrue(createFile(path1, "0"))
             throwWhenNotTrue(createFile(path2, "0"))
 
-            val result: Try[Seq[Unit]] = backup(
-              (path1, _ => path => throwWhenNotTrue(appendToFile(path, "1"))),
-              (path2, _ => _ => throw new RuntimeException("I fail!"))
+            val result: Try[Seq[Unit]] = transactional(
+              single(path1, path => throwWhenNotTrue(appendToFile(path, "1"))),
+              single(path2, _ => throw new RuntimeException("I fail!"))
             )
 
             result shouldBe a[Failure[_]]

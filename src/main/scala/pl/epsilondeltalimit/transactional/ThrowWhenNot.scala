@@ -1,4 +1,4 @@
-package pl.epsilondeltalimit
+package pl.epsilondeltalimit.transactional
 
 object ThrowWhenNot {
   def throwWhenNotTrue(o: => Boolean): Unit =
