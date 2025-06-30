@@ -33,5 +33,4 @@ object SingleWithDeltaVersionBackup {
       case None =>
         throwWhenNotTrue(usingFileSystem(_.delete(new Path(path), true)))
     }
-
 }

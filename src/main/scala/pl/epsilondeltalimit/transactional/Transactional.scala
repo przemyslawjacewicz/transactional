@@ -6,6 +6,9 @@ import scala.util.{Failure, Success, Try}
 
 object Transactional extends LazyLogging {
 
+  def transactional[S, O, B](s: (S, S => O), ss: (S, S => O)*): Try[Seq[O]] =
+    ???
+
   def transactional[S, O, B](s: Single[S, O, B], ss: Single[S, O, B]*): Try[Seq[O]] = {
     val sss = s +: ss
     logger.info(s"[TX:START] Starting operations on sources: ${sss.map(_.source).mkString(",")}.")

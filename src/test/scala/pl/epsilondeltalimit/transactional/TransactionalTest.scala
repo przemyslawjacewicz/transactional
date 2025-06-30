@@ -17,7 +17,7 @@ class TransactionalTest extends UnitFunSpec {
 
   describe("transactional with delta table backup") {
     val single: (String, String => Unit) => SingleWithDeltaVersionBackup[Unit] =
-      (source, output) => SingleWithDeltaVersionBackup(source, output)
+      SingleWithDeltaVersionBackup.apply[Unit]
 
     describe("when executed for the same table") {
       describe("when executed with operations that are successful") {
@@ -148,7 +148,7 @@ class TransactionalTest extends UnitFunSpec {
 
   describe("transactional with parquet copy backup") {
     val single: (String, String => Unit) => SingleWithCopyBackup[Unit] =
-      (source, output) => SingleWithCopyBackup.SparkCopy(source, output, "parquet")
+      SingleWithCopyBackup.SparkCopy.apply[Unit]("parquet")
 
     describe("when executed for the same table") {
       describe("when executed with operations that are successful") {
@@ -279,7 +279,7 @@ class TransactionalTest extends UnitFunSpec {
 
   describe("transactional with copy backup") {
     val single: (String, String => Unit) => SingleWithCopyBackup[Unit] =
-      (source, output) => SingleWithCopyBackup.FileSystemCopy(source, output)
+      SingleWithCopyBackup.FileSystemCopy.apply[Unit]
 
     def createFile(path: String, content: String)(implicit spark: SparkSession): Boolean =
       usingFileSystem { fs =>
